@@ -1,0 +1,39 @@
+---
+name: Release cloud functions
+on:
+  push:
+    tags: ['*']
+jobs:
+  build-datasync-agent-vm-shutdown:
+    runs-on: ubuntu-latest
+    steps:
+      - name: clone repo
+        uses: actions/checkout@v6
+      - name: Install Dependencies
+        run: |-
+          pip3 install --target datasync-agent-vm-shutdown azure-mgmt-compute azure-identity
+          cd datasync-agent-vm-shutdown
+          zip -r ../datasync-agent-vm-shutdown.zip .
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: datasync-agent-vm-shutdown.zip
+          path: datasync-agent-vm-shutdown.zip
+          retention-days: 1
+          overwrite: true
+          archive: false
+  release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    needs: [build-datasync-agent-vm-shutdown]
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          skip-decompress: true
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        with:
+          files: datasync-agent-vm-shutdown.zip
