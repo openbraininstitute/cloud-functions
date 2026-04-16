@@ -22,18 +22,42 @@ jobs:
           retention-days: 1
           overwrite: true
           archive: false
+  build-azure-cost-anomaly-alerts-function:
+    runs-on: ubuntu-latest
+    steps:
+      - name: clone repo
+        uses: actions/checkout@v6
+      - name: Install Dependencies
+        run: |-
+          cd azure-cost-anomaly-alert
+          mkdir .python_packages
+          pip3 install --target .python_packages -r requirements.txt
+          zip -r ../azure-cost-anomaly-alert.zip .
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: azure-cost-anomaly-alert.zip
+          path: azure-cost-anomaly-alert.zip
+          retention-days: 1
+          overwrite: true
+          archive: false
   release:
     permissions:
       contents: write
     runs-on: ubuntu-latest
-    needs: [build-datasync-agent-vm-shutdown]
+    needs:
+      - build-datasync-agent-vm-shutdown
+      - build-azure-cost-anomaly-alerts-function
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
+          merge-multiple: true
           skip-decompress: true
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         if: github.ref_type == 'tag'
         with:
-          files: datasync-agent-vm-shutdown.zip
+          files: |-
+            datasync-agent-vm-shutdown.zip
+            azure-cost-anomaly-alert.zip

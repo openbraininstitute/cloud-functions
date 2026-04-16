@@ -1,0 +1,6 @@
+azure-functions
+azure-identity
+# azure-storage # messes up azure-storage-blob! Don't install separately
+azure-storage-blob>=12.28
+
+pymsteams
