@@ -31,7 +31,7 @@ jobs:
         run: |-
           cd azure-cost-anomaly-alert
           mkdir .python_packages
-          pip3 install --target .python_packages -r requirements.txt
+          pip3 install --target .python_packages/lib/site-packages -r requirements.txt
           zip -r ../azure-cost-anomaly-alert.zip .
       - name: Upload artifact
         uses: actions/upload-artifact@v7
