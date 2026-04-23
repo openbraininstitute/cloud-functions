@@ -21,7 +21,7 @@ app = func.FunctionApp()
 
 TAG_TO_FILTER: str = "OBI_components"
 RANGE_TO_COMPARE_IN_DAYS: int = 7
-PERCENT_CHANGE_NOTIFICATION_CUTOFF: int = 0  # TODO: set to 20 after testing
+PERCENT_CHANGE_NOTIFICATION_CUTOFF: int = 20
 
 
 @app.function_name(name="eventGridTrigger")
