@@ -157,6 +157,9 @@ def extract_data_csv(
     wrapper = io.TextIOWrapper(data)
     reader = csv.DictReader(wrapper, delimiter=",")
     for row in reader:
+        if row["previousInvoiceId"] == "previousInvoiceId":
+            logging.info("Extra title row found; skipping")
+            continue
         row_date = datetime.strptime(row["date"], "%m/%d/%Y")
         row_component_tag = json.loads(row["tags"] or "{}").get(
             TAG_TO_FILTER, "UNTAGGED"
