@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import csv
 import json
@@ -15,7 +16,7 @@ import pymsteams
 import azure.functions as func
 
 from azure.identity import ManagedIdentityCredential
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, ContainerClient
 
 app = func.FunctionApp()
 
@@ -45,22 +46,36 @@ def event_triggered(event: func.EventGridEvent):
         blob_container = event_data["url"].split("/")[3]
         blob_name = "/".join(event_data["url"].split("/")[4:])
         subscription_name = event_data["url"].split("/")[4].replace("_", " ").title()
-        blob_service_client = blob_authenticate(
-            account_url=f"https://{storage_account}"
-        )
-        container_client = blob_service_client.get_container_client(
-            container=blob_container
-        )
-        stream = io.BytesIO()
-        bytes_downloaded = 0
 
-        while bytes_downloaded < event_data["contentLength"]:
-            bytes_downloaded += container_client.download_blob(blob=blob_name).readinto(
-                stream
+        logging.info(f"Storage account: {storage_account}")
+        logging.info(f"Blob container: {blob_container}")
+        logging.info(f"Blob name: {blob_name}")
+
+        combined_blob_data = io.BytesIO()
+        if datetime.now().day <= 7:
+            logging.info("Too close to start of month; reading previous blobs")
+            previous_blob_paths = get_previous_blob_paths(
+                storage_account, blob_container, blob_name
             )
+            logging.info(f"Previous blob names: {previous_blob_paths}")
+            for previous_blob_name in previous_blob_paths:
+                logging.info(f"Reading previous blob {previous_blob_name}")
+                blob_data = read_blob(
+                    storage_account,
+                    blob_container,
+                    previous_blob_name,
+                    event_data["contentLength"],
+                )
 
-        stream.seek(0)
-        calculate_diff(subscription_name=subscription_name, data=stream)
+                combined_blob_data.write(blob_data.read())
+
+        logging.info(f"Reading current month blob: {blob_name}")
+        blob_data = read_blob(
+            storage_account, blob_container, blob_name, event_data["contentLength"]
+        )
+        combined_blob_data.write(blob_data.read())
+        combined_blob_data.seek(0)
+        calculate_diff(subscription_name=subscription_name, data=combined_blob_data)
 
 
 def blob_authenticate(account_url: str) -> BlobServiceClient:
@@ -71,6 +86,61 @@ def blob_authenticate(account_url: str) -> BlobServiceClient:
     )
 
     return blob_service_client
+
+
+def get_container_client(storage_account: str, blob_container: str) -> ContainerClient:
+    blob_service_client = blob_authenticate(account_url=f"https://{storage_account}")
+    container_client = blob_service_client.get_container_client(
+        container=blob_container
+    )
+
+    return container_client
+
+
+def read_blob(
+    storage_account: str, blob_container: str, blob_name: str, content_length: float
+) -> io.BytesIO:
+    """
+    Read a blob into in io.BytesIO object and return with the cursor at position 0
+    """
+    container_client = get_container_client(storage_account, blob_container)
+    stream = io.BytesIO()
+    bytes_downloaded = 0
+
+    while bytes_downloaded < content_length:
+        bytes_downloaded += container_client.download_blob(blob=blob_name).readinto(
+            stream
+        )
+
+    stream.seek(0)
+    return stream
+
+
+def get_previous_blob_paths(
+    storage_account: str, blob_container: str, current_blob_name: str
+) -> list[str]:
+    """
+    Return a list of blob paths for the previous month. It should be only one, but you never know.
+    """
+    current_blob_path = Path(current_blob_name)
+    time_range_dir = current_blob_path.parent.parent.name
+    start, _ = time_range_dir.split("-")
+    start_date = datetime.strptime(start, "%Y%m%d")
+    previous_end_date = start_date - timedelta(days=1)
+    previous_start_date = previous_end_date - timedelta(days=previous_end_date.day - 1)
+    previous_time_range_dir = f"{previous_start_date.strftime('%Y%m%d')}-{previous_end_date.strftime('%Y%m%d')}"
+    previous_blob_prefix_path = (
+        current_blob_path.parent.parent.parent / previous_time_range_dir
+    )
+    previous_blobs = []
+    container_client = get_container_client(storage_account, blob_container)
+    for blob_name in container_client.list_blob_names(
+        name_starts_with=previous_blob_prefix_path.as_posix()
+    ):
+        if blob_name.endswith(".csv"):
+            previous_blobs.append(blob_name)
+
+    return sorted(previous_blobs)
 
 
 def extract_data_csv(
