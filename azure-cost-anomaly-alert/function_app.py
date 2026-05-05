@@ -148,7 +148,7 @@ def extract_data_csv(
     range_start: datetime,
     range_stop: datetime,
     today: datetime,
-) -> Dict:
+) -> tuple[str, Dict]:
     cost_changes = {}
     range_total_component_cost = defaultdict(float)
     range_average_component_cost = defaultdict(float)
@@ -156,10 +156,12 @@ def extract_data_csv(
 
     wrapper = io.TextIOWrapper(data)
     reader = csv.DictReader(wrapper, delimiter=",")
+    subscription_id = ""
     for row in reader:
         if row["previousInvoiceId"] == "previousInvoiceId":
             logging.info("Extra title row found; skipping")
             continue
+        subscription_id = row["SubscriptionId"]
         row_date = datetime.strptime(row["date"], "%m/%d/%Y")
         row_component_tag = json.loads(row["tags"] or "{}").get(
             TAG_TO_FILTER, "UNTAGGED"
@@ -198,7 +200,7 @@ def extract_data_csv(
                     "yesterday_cost": yesterday_total_component_cost[tag],
                 }
 
-    return cost_changes
+    return subscription_id, cost_changes
 
 
 def calculate_diff(
@@ -215,18 +217,20 @@ def calculate_diff(
     ) - timedelta(days=1)
     today = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
 
-    cost_changes = extract_data_csv(
+    subscription_id, cost_changes = extract_data_csv(
         data=data,
         range_start=range_start,
         range_stop=range_stop,
         today=today,
     )
 
-    send_formatted_teams_message(subscription_name, cost_changes)
+    send_formatted_teams_message(subscription_id, subscription_name, cost_changes)
 
 
 def send_formatted_teams_message(
-    subscription_name, cost_changes: Dict[str, Dict[str, float]]
+    subscription_id: str,
+    subscription_name: str,
+    cost_changes: Dict[str, Dict[str, float]],
 ) -> None:
     if not cost_changes:
         logging.info("No cost anomalies; not sending a message")
@@ -253,6 +257,8 @@ def send_formatted_teams_message(
                                 <td> {change_data["yesterday_cost"]:.2f}</td>
                             </tr>"""
     section_text += "</table>"
+    if subscription_id:
+        section_text += f"<a href='https://portal.azure.com#@openbraininstitute.org/blade/Microsoft_Azure_CostManagement/Menu/open/CostAnalysis/scope/%2Fsubscriptions%2F{subscription_id}/view/H4sIAAAAAAAAA41SWU%2FbQBD%2BL%2Fvs0HA1DW8hhhQV2Sh2%2BlKhaLwemxX2rrsHqhXlvzMTJyW0Eu3jzHfMuREyWIta9uJKzL%2FeikiU4HEJukbK3IPzkxh6R%2FmfAS2xNsL3HWMz6QM0c%2BP8IIIMPcO1BR0asMqzZwyq6YkAdW2xBq%2BM3nkYv9dSoKFlw71VFbQcaCILrdhGb%2BRVFv%2FB58zfEtI4Y73Stbj6sRGlsnjAwUnUJSPRwWfloMaYphbbx4jaN6E7KPej5lB%2Fw%2F5NYQq1lqbtjEbtHcm4SdViZQc8IYAbl09gPTflQT5jOTdNaDUvQ8rQ0o48loRW0DikbKdeDLkd1Y3JUztu%2FHfpDO2LkphwtI0%2BYi7RmWAl3hs5rP3%2F6Auef7CnbThpdgIXCiet6tjIfTqF6RjOPlcjeV7B6AKKyWgKYxhdfikm5RQn41M4I%2BfnTr0b5zqUNfKJFY89T7N8ncy%2B3y1mebo8uV7Fi5t8nT7kd2mSnSRpckNM1FA0vCVvA1L4y9P1sHyw1BYdGN3xP%2FzbcHu0g1tDXwG7l3tXhcculesa6JPBePfD%2FG106ldmWa%2FMMQMAAA%3D%3D'>Click here for cost overview</a>"
     section.text(section_text)
     logging.info(f"Section text: {section_text}")
     card.addSection(section)
