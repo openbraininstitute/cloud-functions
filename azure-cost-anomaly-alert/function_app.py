@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import csv
 import json
@@ -15,7 +16,7 @@ import pymsteams
 import azure.functions as func
 
 from azure.identity import ManagedIdentityCredential
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, ContainerClient
 
 app = func.FunctionApp()
 
@@ -45,22 +46,36 @@ def event_triggered(event: func.EventGridEvent):
         blob_container = event_data["url"].split("/")[3]
         blob_name = "/".join(event_data["url"].split("/")[4:])
         subscription_name = event_data["url"].split("/")[4].replace("_", " ").title()
-        blob_service_client = blob_authenticate(
-            account_url=f"https://{storage_account}"
-        )
-        container_client = blob_service_client.get_container_client(
-            container=blob_container
-        )
-        stream = io.BytesIO()
-        bytes_downloaded = 0
 
-        while bytes_downloaded < event_data["contentLength"]:
-            bytes_downloaded += container_client.download_blob(blob=blob_name).readinto(
-                stream
+        logging.info(f"Storage account: {storage_account}")
+        logging.info(f"Blob container: {blob_container}")
+        logging.info(f"Blob name: {blob_name}")
+
+        combined_blob_data = io.BytesIO()
+        if datetime.now().day <= 7:
+            logging.info("Too close to start of month; reading previous blobs")
+            previous_blob_paths = get_previous_blob_paths(
+                storage_account, blob_container, blob_name
             )
+            logging.info(f"Previous blob names: {previous_blob_paths}")
+            for previous_blob_name in previous_blob_paths:
+                logging.info(f"Reading previous blob {previous_blob_name}")
+                blob_data = read_blob(
+                    storage_account,
+                    blob_container,
+                    previous_blob_name,
+                    event_data["contentLength"],
+                )
 
-        stream.seek(0)
-        calculate_diff(subscription_name=subscription_name, data=stream)
+                combined_blob_data.write(blob_data.read())
+
+        logging.info(f"Reading current month blob: {blob_name}")
+        blob_data = read_blob(
+            storage_account, blob_container, blob_name, event_data["contentLength"]
+        )
+        combined_blob_data.write(blob_data.read())
+        combined_blob_data.seek(0)
+        calculate_diff(subscription_name=subscription_name, data=combined_blob_data)
 
 
 def blob_authenticate(account_url: str) -> BlobServiceClient:
@@ -73,12 +88,67 @@ def blob_authenticate(account_url: str) -> BlobServiceClient:
     return blob_service_client
 
 
+def get_container_client(storage_account: str, blob_container: str) -> ContainerClient:
+    blob_service_client = blob_authenticate(account_url=f"https://{storage_account}")
+    container_client = blob_service_client.get_container_client(
+        container=blob_container
+    )
+
+    return container_client
+
+
+def read_blob(
+    storage_account: str, blob_container: str, blob_name: str, content_length: float
+) -> io.BytesIO:
+    """
+    Read a blob into in io.BytesIO object and return with the cursor at position 0
+    """
+    container_client = get_container_client(storage_account, blob_container)
+    stream = io.BytesIO()
+    bytes_downloaded = 0
+
+    while bytes_downloaded < content_length:
+        bytes_downloaded += container_client.download_blob(blob=blob_name).readinto(
+            stream
+        )
+
+    stream.seek(0)
+    return stream
+
+
+def get_previous_blob_paths(
+    storage_account: str, blob_container: str, current_blob_name: str
+) -> list[str]:
+    """
+    Return a list of blob paths for the previous month. It should be only one, but you never know.
+    """
+    current_blob_path = Path(current_blob_name)
+    time_range_dir = current_blob_path.parent.parent.name
+    start, _ = time_range_dir.split("-")
+    start_date = datetime.strptime(start, "%Y%m%d")
+    previous_end_date = start_date - timedelta(days=1)
+    previous_start_date = previous_end_date - timedelta(days=previous_end_date.day - 1)
+    previous_time_range_dir = f"{previous_start_date.strftime('%Y%m%d')}-{previous_end_date.strftime('%Y%m%d')}"
+    previous_blob_prefix_path = (
+        current_blob_path.parent.parent.parent / previous_time_range_dir
+    )
+    previous_blobs = []
+    container_client = get_container_client(storage_account, blob_container)
+    for blob_name in container_client.list_blob_names(
+        name_starts_with=previous_blob_prefix_path.as_posix()
+    ):
+        if blob_name.endswith(".csv"):
+            previous_blobs.append(blob_name)
+
+    return sorted(previous_blobs)
+
+
 def extract_data_csv(
     data: io.BytesIO,
     range_start: datetime,
     range_stop: datetime,
     today: datetime,
-) -> Dict:
+) -> tuple[str, Dict]:
     cost_changes = {}
     range_total_component_cost = defaultdict(float)
     range_average_component_cost = defaultdict(float)
@@ -86,7 +156,12 @@ def extract_data_csv(
 
     wrapper = io.TextIOWrapper(data)
     reader = csv.DictReader(wrapper, delimiter=",")
+    subscription_id = ""
     for row in reader:
+        if row["previousInvoiceId"] == "previousInvoiceId":
+            logging.info("Extra title row found; skipping")
+            continue
+        subscription_id = row["SubscriptionId"]
         row_date = datetime.strptime(row["date"], "%m/%d/%Y")
         row_component_tag = json.loads(row["tags"] or "{}").get(
             TAG_TO_FILTER, "UNTAGGED"
@@ -125,7 +200,7 @@ def extract_data_csv(
                     "yesterday_cost": yesterday_total_component_cost[tag],
                 }
 
-    return cost_changes
+    return subscription_id, cost_changes
 
 
 def calculate_diff(
@@ -142,18 +217,20 @@ def calculate_diff(
     ) - timedelta(days=1)
     today = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
 
-    cost_changes = extract_data_csv(
+    subscription_id, cost_changes = extract_data_csv(
         data=data,
         range_start=range_start,
         range_stop=range_stop,
         today=today,
     )
 
-    send_formatted_teams_message(subscription_name, cost_changes)
+    send_formatted_teams_message(subscription_id, subscription_name, cost_changes)
 
 
 def send_formatted_teams_message(
-    subscription_name, cost_changes: Dict[str, Dict[str, float]]
+    subscription_id: str,
+    subscription_name: str,
+    cost_changes: Dict[str, Dict[str, float]],
 ) -> None:
     if not cost_changes:
         logging.info("No cost anomalies; not sending a message")
@@ -180,6 +257,8 @@ def send_formatted_teams_message(
                                 <td> {change_data["yesterday_cost"]:.2f}</td>
                             </tr>"""
     section_text += "</table>"
+    if subscription_id:
+        section_text += f"<a href='https://portal.azure.com#@openbraininstitute.org/blade/Microsoft_Azure_CostManagement/Menu/open/CostAnalysis/scope/%2Fsubscriptions%2F{subscription_id}/view/H4sIAAAAAAAAA41SWU%2FbQBD%2BL%2Fvs0HA1DW8hhhQV2Sh2%2BlKhaLwemxX2rrsHqhXlvzMTJyW0Eu3jzHfMuREyWIta9uJKzL%2FeikiU4HEJukbK3IPzkxh6R%2FmfAS2xNsL3HWMz6QM0c%2BP8IIIMPcO1BR0asMqzZwyq6YkAdW2xBq%2BM3nkYv9dSoKFlw71VFbQcaCILrdhGb%2BRVFv%2FB58zfEtI4Y73Stbj6sRGlsnjAwUnUJSPRwWfloMaYphbbx4jaN6E7KPej5lB%2Fw%2F5NYQq1lqbtjEbtHcm4SdViZQc8IYAbl09gPTflQT5jOTdNaDUvQ8rQ0o48loRW0DikbKdeDLkd1Y3JUztu%2FHfpDO2LkphwtI0%2BYi7RmWAl3hs5rP3%2F6Auef7CnbThpdgIXCiet6tjIfTqF6RjOPlcjeV7B6AKKyWgKYxhdfikm5RQn41M4I%2BfnTr0b5zqUNfKJFY89T7N8ncy%2B3y1mebo8uV7Fi5t8nT7kd2mSnSRpckNM1FA0vCVvA1L4y9P1sHyw1BYdGN3xP%2FzbcHu0g1tDXwG7l3tXhcculesa6JPBePfD%2FG106ldmWa%2FMMQMAAA%3D%3D'>Click here for cost overview</a>"
     section.text(section_text)
     logging.info(f"Section text: {section_text}")
     card.addSection(section)
