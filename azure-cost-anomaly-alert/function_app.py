@@ -193,7 +193,7 @@ def extract_data_csv(
             ) * 100
             line = f"OBI_component {tag} changed {percent_change:.2f}% ({range_average_component_cost[tag]:.2f} -> {yesterday_total_component_cost[tag]:.2f}) yesterday compared to 7 days before"
             logging.info(line)
-            if percent_change >= PERCENT_CHANGE_NOTIFICATION_CUTOFF:
+            if abs(percent_change) >= PERCENT_CHANGE_NOTIFICATION_CUTOFF:
                 cost_changes[tag] = {
                     "percent_change": percent_change,
                     "range_averages": range_average_component_cost[tag],
