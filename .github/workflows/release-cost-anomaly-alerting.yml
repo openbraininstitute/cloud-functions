@@ -21,6 +21,7 @@ name: Deploy Azure Cost Anomaly Alerts Function
 on:
   push:
     branches: [main]
+    paths: [azure-cost-anomaly-alert/**]
   workflow_dispatch:
 env:
   AZURE_FUNCTIONAPP_NAME: cost-anomaly-alerting  # set this to your function app name on Azure
