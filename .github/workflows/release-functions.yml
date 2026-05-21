@@ -9,6 +9,10 @@ jobs:
     steps:
       - name: clone repo
         uses: actions/checkout@v6
+      - name: setup python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: '3.14'
       - name: Install Dependencies
         run: |-
           pip3 install --target datasync-agent-vm-shutdown azure-mgmt-compute azure-identity
