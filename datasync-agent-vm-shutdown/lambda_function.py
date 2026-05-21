@@ -3,7 +3,7 @@ import json
 import logging
 
 
-from azure.identity import DefaultAzureCredential
+from azure.identity import DefaultAzureCredential, ClientSecretCredential
 from azure.mgmt.compute import ComputeManagementClient
 from azure.core.exceptions import ResourceExistsError
 
@@ -68,7 +68,17 @@ def stop_machine_for_task(finished_task_arn):
 
     vm_name = TASK_TO_MACHINE_MAP[finished_task_arn]
 
-    credential = DefaultAzureCredential()
+    tenant_id = os.environ.get("AZURE_TENANT_ID")
+    client_id = os.environ.get("AZURE_CLIENT_ID")
+    client_secret = os.environ.get("AZURE_CLIENT_SECRET")
+
+    if tenant_id and client_id and client_secret:
+        credential = ClientSecretCredential(tenant_id, client_id, client_secret)
+    else:
+        logger.critical(
+            "At least one of AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET is not set; falling back to DefaultAzureCredential"
+        )
+        credential = DefaultAzureCredential()
     compute_client = ComputeManagementClient(credential, subscription_id)
 
     try:
